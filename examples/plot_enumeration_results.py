@@ -58,7 +58,11 @@ def load_data(output_file: str, verbose: bool = False) -> Dict[str, Dict[int, Li
                 agg[row[0]][seed] = []
             agg[row[0]][seed].append(row[1:-1])
         for name, data in agg.items():
+            if name == "beap_search":
+                name = "eco_search_w/o_buckets"
             name = name.replace("_", " ")
+            if "cd" in name:
+                continue
             if name not in methods:
                 methods[name] = {}
             # Save data for method
@@ -120,4 +124,5 @@ if __name__ == "__main__":
     for count, to_plot in enumerate(plots):
         ax = plt.subplot(1, len(plots), count + 1)
         __PLOTS__[to_plot](ax, ordered_methods)
+    pub.save_fig("./current.png")
     plt.show()

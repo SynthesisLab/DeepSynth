@@ -79,7 +79,7 @@ def load_data(
             trace = [
                 (
                     len(row[0]) > 1,
-                    float(row[1]),
+                    min(float(row[1]), 300),
                     int(row[2]),
                     int(row[3]),
                     int(row[4]),
@@ -241,8 +241,8 @@ for ydata in list(__DATA__.keys()):
             plot_y_wrt_x,
             __DATA__[xdata],
             __DATA__[ydata],
-            hline_at_length=ydata == "tasks",
-            vline_at_length=xdata == "tasks",
+            # hline_at_length=ydata == "tasks",
+            # vline_at_length=xdata == "tasks",
         )
     if ydata != "tasks":
         __PLOTS__[f"rank_by_{ydata}"] = make_plot_wrapper(
@@ -322,4 +322,5 @@ if __name__ == "__main__":
     for count, to_plot in enumerate(plots):
         ax = plt.subplot(1, len(plots), count + 1)
         __PLOTS__[to_plot](ax, ordered_methods)
+    pub.save_fig("./current.png")
     plt.show()

@@ -44,6 +44,25 @@ def __base_loader(
 # =======================================================================================
 __dsl_funcs: Dict[str, Callable[[bool], Optional[SimpleNamespace]]] = {
     "deepcoder": __base_loader("deepcoder.deepcoder"),
+    "bitvectors": __base_loader(
+        "sygus.bitvectors",
+        [
+            "dsl",
+            "evaluator",
+            "lexicon",
+            ("reproduce_bitvector_dataset", "reproduce_dataset"),
+        ],
+    ),
+    "string": __base_loader(
+        "sygus.string",
+        [
+            "dsl",
+            "evaluator",
+            "lexicon",
+            "constant_types",
+            ("reproduce_string_dataset", "reproduce_dataset"),
+        ],
+    ),
     "deepcoder.raw": __base_loader(
         "deepcoder.deepcoder", [("dsl_raw", "dsl"), "evaluator", "lexicon"]
     ),
