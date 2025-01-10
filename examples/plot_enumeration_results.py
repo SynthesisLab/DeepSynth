@@ -60,9 +60,11 @@ def load_data(output_file: str, verbose: bool = False) -> Dict[str, Dict[int, Li
         for name, data in agg.items():
             if name == "beap_search":
                 name = "eco_search_w/o_buckets"
+            elif "cd" in name:
+                if name == "cd4":
+                    name = "cd 4"
+                name = name.replace("cd", "eco_search (bucket size= ") + " )"
             name = name.replace("_", " ")
-            if "cd" in name:
-                continue
             if name not in methods:
                 methods[name] = {}
             # Save data for method

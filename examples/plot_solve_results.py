@@ -17,6 +17,9 @@ from plot_helper import (
 )
 
 
+rename = {"cd_search": "eco_search", "beap_search": "eco_search_w/o_buckets"}
+
+
 def load_data(
     dataset_name: str, output_folder: str, verbose: bool = False
 ) -> Tuple[Dict[str, Dict[int, List]], float]:
@@ -46,7 +49,10 @@ def load_data(
                 if verbose:
                     print(f"\tskipped: does not contain _seed_ nor _uniform_")
                 continue
-        search = name[1 : name.index(seed_text)].replace("_", " ")
+        search = name[1 : name.index(seed_text)]
+        if search in rename:
+            search = rename.get(search)
+        search = search.replace("_", " ")
         all_search.add(search)
         name = name[name.index(seed_text) + len(seed_text) :]
         seed = int(name[: name.index("_")]) if "seed" in seed_text else 0
