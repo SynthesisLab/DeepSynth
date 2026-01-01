@@ -6,10 +6,12 @@ DeepSynth is a high-level framework that enables to leverage program synthesis f
 Key publications:
 * [AAAI 2025 (Oral): EcoSearch: A Constant-Delay Best-First Search Algorithm for Program Synthesis](https://arxiv.org/abs/2412.17330)
 * [SPIN 2023: WikiCoder: Learning to Write Knowledge-Powered Code](https://arxiv.org/abs/2303.08574)
-* [AAAI 2022 (Oral): Scaling Neural Program Synthesis with Distribution-based Search]([https://arxiv.org/abs/2412.17330](https://arxiv.org/abs/2110.12485))
+* [AAAI 2022 (Oral): Scaling Neural Program Synthesis with Distribution-based Search](https://arxiv.org/abs/2110.12485)
 
 <!-- toc -->
 
+--------------------------------------------------------------------------------
+Table of contents
 - [More About DeepSynth](#more-about-DeepSynth)
   - [Combining Deep Learning with Theoretical Guarantees](#combining-deep-learning-with-theoretical-guarantees)
   - [A Scalable Framework](#a-scalable-framework)
