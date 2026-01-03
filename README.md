@@ -83,7 +83,7 @@ See this [open issue of poetry](https://github.com/python-poetry/poetry/issues/6
 
 ## Documentation
 
-[Online Documentation](https://theomat.github.io/DeepSynth/)
+[Online Documentation](https://synthesislab.github.io/DeepSynth/)
 
 
 You might want to generate html pages of the documentation locally, where usage, contribution guidelines and more can be found.
