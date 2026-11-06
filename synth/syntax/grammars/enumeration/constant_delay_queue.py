@@ -35,6 +35,8 @@ class CDQueue:
         self.nelements = 0
         self.start: Optional[float] = None
         self.n = 0
+        # number of times the window was moved or doubled because an element did not fit
+        self.grows = 0
         self.clear()
 
     def update(self) -> None:
@@ -69,7 +71,13 @@ class CDQueue:
             self.mini = element.cost
             self.start = self.mini
             self.n = 0
-        assert element.cost - self.mini <= self.maxi
+        if element.cost < self.mini:
+            # should not happen if elements are pushed in the order described above,
+            # the window is moved instead of placing the element in a wrong cell
+            self.__rebuild__(element.cost, self.mini + self.maxi - element.cost)
+        # an element at distance maxi would land in the current cell, hence >=
+        elif element.cost - self.mini >= self.maxi:
+            self.__rebuild__(self.mini, element.cost - self.mini)
         # a = f"[PUSH] {F.LIGHTYELLOW_EX}BEFORE{F.RESET}:{self}"
         # print(f"[PUSH] {F.LIGHTYELLOW_EX}BEFORE{F.RESET}:", self)
         # b = f"\t\t\t{element}"
@@ -83,6 +91,39 @@ class CDQueue:
         #     print(b)
         #     print(f"[PUSH] {F.GREEN}AFTER{F.RESET}:", self)
 
+    def __rebuild__(self, mini: float, width: float) -> None:
+        """
+        Move the lower bound of the window to mini, double its width until it is larger than width,
+        and push back all elements.
+        When called from push, the lower bound is kept or lowered, so that elements pushed after a pop still fit.
+        """
+        elems = sorted(self.__elements__(self.cells), key=lambda e: e.cost)
+        if elems:
+            width = max(width, elems[-1].cost - mini)
+        maxi = self.maxi
+        while maxi <= width:
+            maxi *= 2
+        self.clear()
+        self.maxi = maxi
+        self.mini = mini
+        self.start = mini
+        for elem in elems:
+            self.__push__(
+                elem, elem.cost - mini, self.maxi, self.cells, self.translation
+            )
+        self.grows += 1
+
+    def __elements__(self, cells: List) -> List[CostTuple]:
+        out = []
+        for nelem, val in cells:
+            if val is None:
+                continue
+            if nelem == 1:
+                out.append(val)
+            else:
+                out += self.__elements__(val)
+        return out
+
     def __push__(
         self,
         element: CostTuple,
@@ -95,7 +136,10 @@ class CDQueue:
         stack: List[Tuple[List[List[int]], int]] = []
         while True:
             unit = maxi / self.k
-            lbi = int(cost / maxi * self.k)
+            # clamp: with floating point errors an element on the upper boundary of a cell
+            # can be pushed into this cell with an offset equal to its width,
+            # it must then go into the last sub-cell and not wrap around to the first one
+            lbi = min(max(int(cost / maxi * self.k), 0), self.k - 1)
             index = (lbi + translation) % self.k
             # assert cost >= 0, f"cost:{cost} element:{element} queue:{self}"
             nelem, val = cells[index]

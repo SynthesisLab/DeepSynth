@@ -1,8 +1,77 @@
+import re
+import zlib
+
 import numpy as np
 
 import matplotlib.pyplot as plt
 
-from typing import List, Optional, Dict, Tuple
+from typing import Any, List, Optional, Dict, Tuple
+
+# Each algorithm has its own color, line style, marker and hatch, the same in all figures,
+# so that the figures remain readable in grayscale.
+# Colors: categorical palette in fixed order, a shade of the same blue for the bucket sizes of Eco Search.
+__STYLES__: List[Tuple[List[str], Dict[str, Any]]] = [
+    (
+        ["eco search", "cd search"],
+        dict(color="#2a78d6", linestyle="-", marker="o", hatch=""),
+    ),
+    (
+        ["eco search w o buckets", "beap search"],
+        dict(color="#eb6834", linestyle="--", marker="s", hatch="//"),
+    ),
+    (["heap search"], dict(color="#1baf7a", linestyle="-.", marker="^", hatch="\\\\")),
+    (["bee search"], dict(color="#eda100", linestyle=":", marker="D", hatch="..")),
+    (
+        ["bee search buckets", "bee search with buckets"],
+        dict(color="#e87ba4", linestyle=(0, (5, 1)), marker="v", hatch="xx"),
+    ),
+    (
+        ["cd search eager", "eco search eager", "eco search with eager expansion"],
+        dict(color="#008300", linestyle=(0, (3, 1, 1, 1)), marker="P", hatch="++"),
+    ),
+    (["a star"], dict(color="#6250d6", linestyle=(0, (1, 1)), marker="X", hatch="--")),
+    (
+        ["bucket search"],
+        dict(color="#e34948", linestyle=(0, (5, 2, 1, 2)), marker="*", hatch="oo"),
+    ),
+    (
+        ["cd4", "eco search bucket size 4"],
+        dict(color="#86b6ef", linestyle=(0, (5, 1)), marker="h", hatch="||"),
+    ),
+    (
+        ["cd16", "eco search bucket size 16"],
+        dict(color="#256abf", linestyle="-", marker=">", hatch=""),
+    ),
+    (
+        ["cd64", "eco search bucket size 64"],
+        dict(
+            color="#104281", linestyle=(0, (3, 1, 1, 1, 1, 1)), marker="<", hatch="**"
+        ),
+    ),
+]
+__FALLBACK_STYLES__: List[Dict[str, Any]] = [
+    dict(color="#6e6e6e", linestyle=ls, marker=m, hatch="")
+    for ls in [(0, (2, 2)), (0, (4, 1, 1, 1, 1, 1)), (0, (8, 2))]
+    for m in ["d", "p", "8", "H"]
+]
+
+
+def __normalize__(label: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", label.lower()).split())
+
+
+def style_for(label: str) -> Dict[str, Any]:
+    """
+    Return the color, linestyle, marker and hatch of the algorithm with the given label.
+    """
+    key = __normalize__(label)
+    for names, style in __STYLES__:
+        if key in names:
+            return dict(style)
+    # deterministic, so that an unknown algorithm also gets the same style in all figures
+    return dict(
+        __FALLBACK_STYLES__[zlib.crc32(key.encode()) % len(__FALLBACK_STYLES__)]
+    )
 
 
 def plot_with_incertitude(
@@ -57,7 +126,17 @@ def plot_with_incertitude(
         mean = np.mean(Y, axis=0)
         std = std_factor * np.std(Y, axis=0)
 
-    p = ax.plot(target_x, mean, label=label)
+    style = style_for(label)
+    style.pop("hatch")
+    p = ax.plot(
+        target_x,
+        mean,
+        label=label,
+        linewidth=1.5,
+        markersize=6,
+        markevery=max(1, len(target_x) // 8),
+        **style,
+    )
     color = p[0].get_color()
     upper = mean + std
     if maxy is not None:
@@ -65,7 +144,7 @@ def plot_with_incertitude(
     lower = mean - std
     if miny is not None:
         lower = np.maximum(lower, miny)
-    ax.fill_between(target_x, lower, upper, color=color, alpha=0.5)
+    ax.fill_between(target_x, lower, upper, color=color, alpha=0.15, linewidth=0)
 
 
 def make_plot_wrapper(func, *args, **kwargs) -> None:
@@ -118,8 +197,8 @@ def plot_y_wrt_x(
         if cumulative:
             max_a = max(max(np.sum(yi) for yi in ydata), max_a)
             max_b = max(max(np.sum(xi) for xi in xdata), max_b)
-    ax.set_xlabel(b_name)
-    ax.set_ylabel(a_name)
+    ax.set_xlabel(f"{b_name} (log scale)" if logx else b_name)
+    ax.set_ylabel(f"{a_name} (log scale)" if logy else a_name)
     if hline_at_length:
         ax.hlines(
             [data_length],
@@ -225,6 +304,8 @@ def plot_rank_by(
             alpha=0.9,
             linewidth=1,
             edgecolor="white",
+            color=style_for(label)["color"],
+            hatch=style_for(label)["hatch"],
         )
         ax.bar_label(bars, labels=[f"{x:.1%}" for x in mean_ranks[i]])
         bottom += mean_ranks[i]
@@ -285,6 +366,8 @@ def plot_dist(
             alpha=0.9,
             linewidth=1,
             edgecolor="white",
+            color=style_for(label)["color"],
+            hatch=style_for(label)["hatch"],
         )
         ax.bar_label(bars, labels=[f"{x:.1%}" for x in true_hist])
         bottom += true_hist

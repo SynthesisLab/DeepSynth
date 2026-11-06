@@ -93,7 +93,6 @@ class HSEnumerator(
         """
         A generator which outputs the next most probable program
         """
-        self.__init_non_terminal__(self.G.start)
         self._reevaluate_()
         # Now we can init the heaps
         for S in self.G.rules:
@@ -117,6 +116,7 @@ class HSEnumerator(
         S: Tuple[Type, U],
         best_program: Optional[Program] = None,
         best_priority: Optional[Ordered] = None,
+        init_arguments: bool = True,
     ) -> Tuple[Optional[Program], Optional[Ordered]]:
         for P in self.rules[S]:
             nargs = self.G.arguments_length_for(S, P)
@@ -125,7 +125,8 @@ class HSEnumerator(
                 arguments = []
                 information, current = self.G.derive(self.G.start_information(), S, P)
                 for _ in range(nargs):
-                    self.__init_non_terminal__(current)
+                    if init_arguments:
+                        self.__init_non_terminal__(current)
                     if current not in self.max_priority:
                         break
                     # Try to init sub Tuple[Type, U] in case they were not initialised
@@ -162,19 +163,27 @@ class HSEnumerator(
             self.max_priority[S] = best_program
 
     def _reevaluate_(self) -> None:
+        # compute the best program of each non-terminal as a fixpoint:
+        # with cyclic grammars, the best program of a non-terminal can improve after
+        # its first computation, and __init_non_terminal__ does not recompute it.
+        # Arguments are not initialised recursively: with cycles, this recursion
+        # recomputes the same non-terminals an exponential number of times
         changed = True
         while changed:
             changed = False
             for S in list(self.G.rules.keys()):
-                old = self.max_priority.get(S, None)
-                self.__init_non_terminal__(S)
-
-                if S not in self.max_priority or old != self.max_priority[S]:
+                old = [self.max_priority.get((S, P), None) for P in self.rules[S]]
+                best_program, _ = self.__compute_max_prio__(S, init_arguments=False)
+                if best_program is not None:
+                    self.max_priority[S] = best_program
+                if old != [self.max_priority.get((S, P), None) for P in self.rules[S]]:
                     changed = True
 
     def __init_heap__(self, S: Tuple[Type, U]) -> None:
         # 2) add P(max(S1),max(S2), ...) to self.heaps[S]
         for P in self.rules[S]:
+            if (S, P) not in self.max_priority:
+                continue  # P does not derive any program
             program = self.max_priority[(S, P)]
             hash_program = hash(program)
             # Remark: the program cannot already be in self.heaps[S]
@@ -213,7 +222,7 @@ class HSEnumerator(
             for i in range(args_len):
                 # S2 is non-terminal symbol used to derive the i-th argument
                 succ_sub_program = self.query(S2, succ.arguments[i])
-                if succ_sub_program:
+                if succ_sub_program is not None:
                     new_arguments = succ.arguments[:]
                     new_arguments[i] = succ_sub_program
                     new_program = Function(F, new_arguments)
@@ -241,7 +250,7 @@ class HSEnumerator(
         """
         computing the successor of program from S
         """
-        if program:
+        if program is not None:
             hash_program = hash(program)
         else:
             hash_program = 123891
@@ -250,22 +259,27 @@ class HSEnumerator(
         if hash_program in self.succ[S]:
             return self.succ[S][hash_program]
 
-        # otherwise the successor is the next element in the heap
-        try:
+        # we first add all potential successors of program in heaps[S],
+        # and only then pop: with cyclic grammars, the successors of the arguments
+        # of program may only be known at this point
+        if program is not None:
+            self.__add_successors__(program, S)
+
+        # the successor is the next element in the heap
+        if len(self.heaps[S]) == 0:
+            return None  # the heap is empty: there are no successors from S
+        element = heappop(self.heaps[S])
+        succ = element.program
+        while succ in self.deleted:
+            # a deleted program is never queried so it must be expanded here
+            self.__add_successors__(succ, S)
+            if len(self.heaps[S]) == 0:
+                return None
             element = heappop(self.heaps[S])
             succ = element.program
-            while succ in self.deleted:
-                self.__add_successors__(succ, S)
-                element = heappop(self.heaps[S])
-                succ = element.program
-        except:
-            return None  # the heap is empty: there are no successors from S
 
         self.succ[S][hash_program] = succ  # we store the successor
         self.pred[S][hash(succ)] = hash_program  # we store the predecessor
-
-        # now we need to add all potential successors of succ in heaps[S]
-        self.__add_successors__(succ, S)
         return succ
 
     @abstractmethod

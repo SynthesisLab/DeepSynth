@@ -1,6 +1,9 @@
+from collections import deque
 from itertools import product
 from heapq import heappush, heappop, heapify
 from typing import (
+    Any,
+    Deque,
     Dict,
     Generator,
     Generic,
@@ -104,7 +107,8 @@ class CDSearch(
             for P in self.G.grammar.rules[S]:
                 args = self._non_terminal_for[S][P]
                 if args and args not in self._queue_derivation:
-                    self._queue_derivation[args] = CDQueue(int(self.M), k)
+                    # at least 1: M is 0 when all rules have the same cost
+                    self._queue_derivation[args] = CDQueue(max(1, int(self.M)), k)
                     self._bank_derivation[args] = {}
                     self._cost_lists_derivation[args] = []
                     self._empties_derivation[args] = set()
@@ -439,6 +443,136 @@ class CDSearch(
         return enum
 
 
+class CDSearchEager(CDSearch[U, V, W]):
+    """
+    Eco Search with eager expansion instead of frugal expansion (ablation).
+
+    Frugal expansion only reads the cost of the next level of a non-terminal (or of a tuple
+    of argument non-terminals) when a level is requested.
+    Eager expansion generates the next level itself.
+    Generating it at once, inside the generation of the current level, may read a level that is
+    being generated (with cyclic grammars), so it is postponed until the current level of the
+    start non-terminal has been generated.
+    Only the levels requested by the frugal algorithm trigger the generation of their next level:
+    if the levels requested while generating a level eagerly did as well, the generation would
+    cascade along the cycles of the grammar and never terminate
+    (for instance with W -> k(U), U -> u1 | q(W)).
+    """
+
+    def __init__(
+        self,
+        G: ProbDetGrammar[U, V, W],
+        filter: Optional[Filter[Program]] = None,
+        k: int = 5,
+    ) -> None:
+        super().__init__(G, filter, k)
+        self._pending: Deque[Tuple[Tuple[Type, U], Optional[DerivableProgram], int]] = (
+            deque()
+        )
+        self._scheduled: Set[Tuple[Any, int]] = set()
+        # number of programs generated with a cost larger than the current cost
+        self.programs_beyond_current_cost = 0
+        self._eager = False
+        self._generated_eagerly: List[Tuple[Tuple[Type, U], int]] = []
+
+    def query(
+        self, S: Tuple[Type, U], cost_index: int
+    ) -> Generator[Program, None, None]:
+        yield from super().query(S, cost_index)
+        if self._eager:
+            self._generated_eagerly.append((S, cost_index))
+
+    def _schedule_(
+        self, S: Tuple[Type, U], P: Optional[DerivableProgram], cost_index: int
+    ) -> None:
+        if self._eager:
+            return
+        # derivations are identified by their tuple of argument non-terminals
+        key = (
+            (S, cost_index) if P is None else (self._non_terminal_for[S][P], cost_index)
+        )
+        if key not in self._scheduled:
+            self._scheduled.add(key)
+            self._pending.append((S, P, cost_index))
+
+    def query_derivation(
+        self, S: Tuple[Type, U], P: DerivableProgram, cost_index: int
+    ) -> List[List[List[Program]]]:
+        out = super().query_derivation(S, P, cost_index)
+        self._schedule_(S, P, cost_index + 1)
+        return out
+
+    def _query_list_(
+        self, S: Tuple[Type, U], cost_index: int
+    ) -> Tuple[bool, List[Program]]:
+        out = super()._query_list_(S, cost_index)
+        self._schedule_(S, None, cost_index + 1)
+        return out
+
+    def _expand_pending_(self, current_cost: float) -> None:
+        self._eager = True
+        while self._pending:
+            S, P, cost_index = self._pending.popleft()
+            if P is None:
+                if (
+                    cost_index >= len(self._cost_lists_nt[S])
+                    or cost_index in self._bank_nt[S]
+                    or cost_index in self._empties_nt[S]
+                ):
+                    continue
+                for _ in self.query(S, cost_index):
+                    pass
+            else:
+                args = self._non_terminal_for[S][P]
+                if (
+                    cost_index >= len(self._cost_lists_derivation[args])
+                    or cost_index in self._bank_derivation[args]
+                ):
+                    continue
+                CDSearch.query_derivation(self, S, P, cost_index)
+        self._eager = False
+        for S, cost_index in self._generated_eagerly:
+            if self._cost_lists_nt[S][cost_index] > current_cost:
+                self.programs_beyond_current_cost += len(
+                    self._bank_nt[S].get(cost_index, [])
+                )
+        self._generated_eagerly.clear()
+
+    def generator(self) -> Generator[Program, None, None]:
+        self._init_non_terminal_(self.G.start)
+        self._reevaluate_()
+        # Update M
+        self.__compute_bounds__()
+
+        start = self.G.start
+        n = 0
+        failed = False
+        while not failed:
+            self._failed_by_empties = False
+            failed = True
+            if n < len(self._cost_lists_nt[start]) and (
+                n in self._bank_nt[start] or n in self._empties_nt[start]
+            ):
+                # this level was already generated by eager expansion
+                failed = False
+                for prog in self._bank_nt[start].get(n, []):
+                    if prog not in self._deleted:
+                        yield prog
+            else:
+                for prog in self.query(start, n):
+                    failed = False
+                    yield prog
+                failed = failed and not self._failed_by_empties
+            if n < len(self._cost_lists_nt[start]):
+                self._schedule_(start, None, n + 1)
+                self._expand_pending_(self._cost_lists_nt[start][n])
+            n += 1
+
+    @classmethod
+    def name(cls) -> str:
+        return "cd-search-eager"
+
+
 def enumerate_prob_grammar(
     G: ProbDetGrammar[U, V, W], k: int = 10, precision: float = 1e-5
 ) -> CDSearch[U, V, W]:
@@ -450,3 +584,16 @@ def enumerate_prob_grammar(
         },
     )
     return CDSearch(Gp, k=k)
+
+
+def enumerate_prob_grammar_eager(
+    G: ProbDetGrammar[U, V, W], k: int = 10, precision: float = 1e-5
+) -> CDSearchEager[U, V, W]:
+    Gp: ProbDetGrammar = ProbDetGrammar(
+        G.grammar,
+        {
+            S: {P: -int(np.log(p) * 1 / precision) for P, p in val.items() if p > 0}
+            for S, val in G.probabilities.items()
+        },
+    )
+    return CDSearchEager(Gp, k=k)

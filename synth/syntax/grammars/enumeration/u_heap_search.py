@@ -229,7 +229,7 @@ class UHSEnumerator(ProgramEnumerator[None], ABC, Generic[U, V, W]):
             Sip1 = lst[-1][0]
             if self.__add_successors_to_heap__(succ, S, Sip1, info, i + 1, v):
                 succ_sub_program = self.query(Si, succ.arguments[i])
-                if succ_sub_program:
+                if succ_sub_program is not None:
                     new_arguments = succ.arguments[:]
                     new_arguments[i] = succ_sub_program
                     new_program = Function(succ.function, new_arguments)
@@ -268,7 +268,7 @@ class UHSEnumerator(ProgramEnumerator[None], ABC, Generic[U, V, W]):
         """
         if S not in self._init:
             self.__init_non_terminal__(S)
-        if program:
+        if program is not None:
             hash_program = hash(program)
         else:
             hash_program = 123891
@@ -277,22 +277,27 @@ class UHSEnumerator(ProgramEnumerator[None], ABC, Generic[U, V, W]):
         if hash_program in self.succ[S]:
             return self.succ[S][hash_program]
 
-        # otherwise the successor is the next element in the heap
-        try:
+        # we first add all potential successors of program in heaps[S],
+        # and only then pop: with cyclic grammars, the successors of the arguments
+        # of program may only be known at this point
+        if program is not None:
+            self.__add_successors__(program, S)
+
+        # the successor is the next element in the heap
+        if len(self.heaps[S]) == 0:
+            return None  # the heap is empty: there are no successors from S
+        element = heappop(self.heaps[S])
+        succ = element.program
+        while succ in self.deleted:
+            # a deleted program is never queried so it must be expanded here
+            self.__add_successors__(succ, S)
+            if len(self.heaps[S]) == 0:
+                return None
             element = heappop(self.heaps[S])
             succ = element.program
-            while succ in self.deleted:
-                self.__add_successors__(succ, S)
-                element = heappop(self.heaps[S])
-                succ = element.program
-        except:
-            return None  # the heap is empty: there are no successors from S
 
         self.succ[S][hash_program] = succ  # we store the successor
         self.pred[S][hash(succ)] = hash_program  # we store the predecessor
-
-        # now we need to add all potential successors of succ in heaps[S]
-        self.__add_successors__(succ, S)
         return succ
 
     def merge_program(self, representative: Program, other: Program) -> None:

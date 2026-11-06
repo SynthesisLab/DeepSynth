@@ -19,6 +19,7 @@ import numpy as np
 from synth.filter.filter import Filter
 from synth.syntax.grammars.cfg import CFG
 from synth.syntax.grammars.enumeration.program_enumerator import ProgramEnumerator
+from synth.syntax.grammars.enumeration.constant_delay_queue import CDQueue, CostTuple
 from synth.syntax.grammars.grammar import DerivableProgram
 from synth.syntax.program import Program, Function
 from synth.syntax.grammars.tagged_det_grammar import ProbDetGrammar
@@ -283,3 +284,133 @@ def enumerate_prob_grammar(
         },
     )
     return BeeSearch(Gp)
+
+
+class BeeSearchBuckets(BeeSearch[U, V, W]):
+    """
+    Bee Search where the binary heaps of cost tuples are replaced by the bucket queue of Eco Search.
+
+    A single queue is used for all non-terminals: Bee Search has a single list of costs,
+    and combinations that were delayed can have a cost smaller than the cheapest queued
+    combination of their non-terminal, which a per non-terminal bucket queue cannot hold.
+    The width of the window is not known beforehand, it is doubled when needed.
+    """
+
+    def __init__(
+        self,
+        G: ProbDetGrammar[U, V, W],
+        filter: Optional[Filter[Program]] = None,
+        k: int = 20,
+    ) -> None:
+        all_costs = [G.probabilities[S][P] for S in G.rules for P in G.rules[S]]
+        self._queue = CDQueue(max(1, int(max(all_costs) - min(all_costs))), k)
+        # the first combinations are pushed in increasing order of cost once they are all known
+        self._first_combinations: Optional[List[CostTuple]] = []
+        super().__init__(G, filter)
+        for ct in sorted(self._first_combinations, key=lambda ct: ct.cost):
+            self._queue.push(ct)
+        self._first_combinations = None
+        if not self._queue.is_empty():
+            self._queue.update()
+
+    def _add_combination_(
+        self,
+        S: Tuple[Type, U],
+        P: DerivableProgram,
+        index_cost: List[int],
+        changed_index: Optional[int] = None,
+    ) -> None:
+        # Check if it needs to be delayed or not
+        to_check = (
+            [changed_index]
+            if changed_index is not None
+            else [i for i in range(len(index_cost))]
+        )
+        for i in to_check:
+            if index_cost[i] >= len(self._cost_list):
+                self._delayed[S].append((index_cost, P, changed_index))
+                return
+        # No need to delay add it
+        new_cost = self._index_cost2real_cost_(S, P, index_cost)
+        ct = CostTuple(new_cost, [(S, P, index_cost)])  # type: ignore
+        if self._first_combinations is not None:
+            self._first_combinations.append(ct)
+        else:
+            self._queue.push(ct)
+
+    def _next_cheapest_(self) -> Tuple[List[Tuple[Type, U]], Optional[float]]:
+        if self._queue.is_empty():
+            return [], None
+        self._queue.update()
+        ct = self._queue.peek()
+        return [S for S, _, _ in ct.combinations], ct.cost  # type: ignore
+
+    def _produce_programs_from_cost_(
+        self, non_terminals: List[Tuple[Type, U]], cost: float
+    ) -> Generator[Program, None, None]:
+        ct = self._queue.pop()
+        # Add cost since we are pre-generative
+        cost_index = self._add_cost_(self.G.start, ct.cost)[1]
+        combinations: List[Tuple[Tuple[Type, U], DerivableProgram, List[int]]] = (
+            ct.combinations  # type: ignore
+        )
+        for S, P, combination in combinations:
+            maxi = self._max_index[S]
+            nargs = self.G.arguments_length_for(S, P)
+            Sargs = [self._non_terminal_for_(S, P, i) for i in range(nargs)]
+            # Generate next combinations
+            for i in range(nargs):
+                index_cost = combination.copy()
+                index_cost[i] += 1
+                self._add_combination_(S, P, index_cost, i)
+                if index_cost[i] > maxi:
+                    maxi = index_cost[i]
+                # Avoid duplication with this condition
+                if index_cost[i] > 1:
+                    break
+            self._max_index[S] = maxi
+            # Generate programs
+            args_possibles = []
+            for i in range(nargs):
+                local_bank = self._bank[Sargs[i]]
+                ci = combination[i]
+                if ci not in local_bank or len(local_bank[ci]) == 0:
+                    break
+                args_possibles.append(local_bank[ci])
+            if len(args_possibles) != nargs:
+                continue
+            for new_args in product(*args_possibles):
+                if len(args_possibles) == 0:
+                    new_program: Program = P
+                else:
+                    new_program = Function(P, list(new_args))
+                if self._add_program_(S, new_program, cost_index) and S == self.G.start:
+                    yield new_program
+
+    def programs_in_queues(self) -> int:
+        return sum(len(val) for val in self._delayed.values()) + self._queue.size()
+
+    @classmethod
+    def name(cls) -> str:
+        return "bee-search-buckets"
+
+    def clone(
+        self, G: Union[ProbDetGrammar, ProbUGrammar]
+    ) -> "BeeSearchBuckets[U, V, W]":
+        assert isinstance(G, ProbDetGrammar)
+        enum = self.__class__(G, k=self._queue.k - 1)
+        return enum
+
+
+def enumerate_prob_grammar_buckets(
+    G: ProbDetGrammar[U, V, W], threshold: int = 2, k: int = 20
+) -> BeeSearchBuckets[U, V, W]:
+    mult = 10**threshold
+    Gp: ProbDetGrammar = ProbDetGrammar(
+        G.grammar,
+        {
+            S: {P: int(-np.log(p) * mult) for P, p in val.items() if p > 0}
+            for S, val in G.probabilities.items()
+        },
+    )
+    return BeeSearchBuckets(Gp, k=k)

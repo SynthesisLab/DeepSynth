@@ -1,5 +1,7 @@
 import os
 import sys
+import multiprocessing
+import resource
 from typing import Any, Callable, Iterable, List, Optional, Set, Tuple, Union
 import csv
 
@@ -32,6 +34,10 @@ from synth.syntax import (
 from synth.filter import DFTAFilter, ObsEqFilter
 from synth.filter.constraints import add_dfta_constraints
 from synth.syntax.program import Program
+from synth.syntax.grammars.enumeration.bee_search import enumerate_prob_grammar_buckets
+from synth.syntax.grammars.enumeration.constant_delay import (
+    enumerate_prob_grammar_eager as cd_enumerate_prob_grammar_eager,
+)
 from synth.task import Task
 from synth.utils import load_object
 from synth.utils.data_storage import legacy_load_object
@@ -64,6 +70,9 @@ SEARCH_ALGOS = {
         lambda x: hs_enumerate_bucket_prob_u_grammar(x, 3),
     ),
     "bee_search": (bs_enumerate_prob_grammar, None),
+    # ablations: Bee Search with the bucket queue of Eco Search, Eco Search with eager expansion
+    "bee_search_buckets": (lambda x: enumerate_prob_grammar_buckets(x, k=20), None),
+    "cd_search_eager": (lambda x: cd_enumerate_prob_grammar_eager(x, 20), None),
     "a_star": (as_enumerate_prob_grammar, None),
 }
 
@@ -117,6 +126,11 @@ parser.add_argument(
     help="runtime pruning",
 )
 parser.add_argument(
+    "--memory",
+    action="store_true",
+    help="solve each task in a child process and record its peak resident memory",
+)
+parser.add_argument(
     "--filter",
     nargs="*",
     type=str,
@@ -137,6 +151,7 @@ support: Optional[str] = (
 )
 pruning: List[str] = parameters.pruning or []
 filter_files: List[str] = parameters.filter or []
+measure_memory: bool = parameters.memory
 
 if not os.path.exists(dataset_file) or not os.path.isfile(dataset_file):
     print("Dataset must be a valid dataset file!", file=sys.stderr)
@@ -233,6 +248,100 @@ def setup_filters(
     return out
 
 
+def solve_task(
+    task: Task[PBE],
+    pcfg: Union[ProbDetGrammar, ProbUGrammar],
+    solver: PBESolver,
+    custom_enumerate: Callable[
+        [Union[ProbDetGrammar, ProbUGrammar]], ProgramEnumerator
+    ],
+    constant_types: Set[Type],
+    stats_name: List[str],
+) -> Tuple[bool, Optional[Program], List[Any]]:
+    task_solved = False
+    solution = None
+    try:
+        enumerator = custom_enumerate(pcfg)
+        enumerator.filter = setup_filters(task, constant_types)
+        sol_generator = solver.solve(task, enumerator, timeout=task_timeout)
+        solution = next(sol_generator)
+        sol_generator.send(True)
+        task_solved = True
+    except StopIteration:
+        pass
+    stats = [solver.get_stats(name) for name in stats_name]
+    solver.reset_stats()
+    return task_solved, solution, stats
+
+
+def __max_rss_kb__() -> int:
+    # ru_maxrss is in bytes on macOS and in kilobytes on Linux
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss // 1024 if sys.platform == "darwin" else rss
+
+
+def __child_solve__(connection: Any, *args: Any) -> None:
+    baseline = __max_rss_kb__()
+    try:
+        task_solved, solution, stats = solve_task(*args)
+        result = (task_solved, str(solution) if solution else None, stats, "")
+    except MemoryError:
+        result = (False, None, [], "MemoryError")
+    connection.send((result, __max_rss_kb__(), baseline))
+    connection.close()
+
+
+def solve_in_child_process(
+    task: Task[PBE],
+    pcfg: Union[ProbDetGrammar, ProbUGrammar],
+    solver: PBESolver,
+    custom_enumerate: Callable[
+        [Union[ProbDetGrammar, ProbUGrammar]], ProgramEnumerator
+    ],
+    constant_types: Set[Type],
+    stats_name: List[str],
+) -> Tuple[bool, Optional[str], List[Any], List[Any]]:
+    """
+    Solve the task in a forked child process, and return in addition
+    [peak resident memory of the child, its resident memory when it started, memory error].
+    A run that raises MemoryError or that is killed (e.g. by the OOM killer, exit code 137) is a failure.
+    """
+    ctx = multiprocessing.get_context("fork")
+    parent_connection, child_connection = ctx.Pipe(duplex=False)
+    process = ctx.Process(
+        target=__child_solve__,
+        args=(
+            child_connection,
+            task,
+            pcfg,
+            solver,
+            custom_enumerate,
+            constant_types,
+            stats_name,
+        ),
+    )
+    process.start()
+    child_connection.close()
+    try:
+        (task_solved, solution, stats, error), peak, baseline = parent_connection.recv()
+    except EOFError:
+        # the child died without answering
+        task_solved, solution, stats, error, peak, baseline = (
+            False,
+            None,
+            [],
+            "",
+            None,
+            None,
+        )
+    process.join()
+    if process.exitcode != 0 and not error:
+        error = f"killed (exit code {process.exitcode})"
+    if not stats:
+        stats = [None for _ in stats_name]
+    return task_solved, solution, stats, [peak, baseline, error]
+
+
 def enumerative_search(
     dataset: Dataset[PBE],
     evaluator: DSLEvaluator,
@@ -256,30 +365,33 @@ def enumerative_search(
         if supported_type_requests is None or t.type_request in supported_type_requests
     ]
     stats_name = solver.available_stats()
+    memory_columns = (
+        ["peak_memory_kb", "baseline_memory_kb", "memory_error"]
+        if measure_memory
+        else []
+    )
     if start == 0:
-        trace.append(["solved", "solution"] + stats_name)
+        trace.append(["solved", "solution"] + stats_name + memory_columns)
     for task, pcfg in zip(tasks[start:], pcfgs[start:]):
         if task.metadata.get("name", None) is not None:
             pbar.set_description_str(task.metadata["name"])
         total += 1
-        task_solved = False
-        solution = None
         if isinstance(task.specification, PBEWithConstants):
             pcfg = pcfg.instantiate_constants(task.specification.constants)
         try:
-            enumerator = custom_enumerate(pcfg)
-            enumerator.filter = setup_filters(task, constant_types)
-            sol_generator = solver.solve(task, enumerator, timeout=task_timeout)
-            solution = next(sol_generator)
-            sol_generator.send(True)
-            task_solved = True
-            solved += 1
+            if measure_memory:
+                task_solved, solution, stats, memory = solve_in_child_process(
+                    task, pcfg, solver, custom_enumerate, constant_types, stats_name
+                )
+            else:
+                task_solved, solution, stats = solve_task(
+                    task, pcfg, solver, custom_enumerate, constant_types, stats_name
+                )
+                memory = []
         except KeyboardInterrupt:
             break
-        except StopIteration:
-            pass
-        out = [task_solved, solution] + [solver.get_stats(name) for name in stats_name]
-        solver.reset_stats()
+        solved += int(task_solved)
+        out = [task_solved, solution] + stats + memory
         trace.append(out)
         pbar.update(1)
         evaluator.clear_cache()
