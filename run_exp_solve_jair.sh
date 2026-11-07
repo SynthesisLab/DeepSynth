@@ -2,9 +2,12 @@
 # FlashFill (SyGuS strings) and DeepCoder experiments of the JAIR version (Figures 2-3).
 #
 #   ./run_exp_solve_jair.sh data <beesearch_tasks_folder> <deepcoder_dataset_folder>
-#   ./run_exp_solve_jair.sh train <domain> <seed> [loss]   # training set, model, audit, PCFGs of the test set
+#   ./run_exp_solve_jair.sh train <domain> <seed> [variant] # training set, model, audit, PCFGs of the test set
 #   ./run_exp_solve_jair.sh jobs-train                     # one line per (domain, seed)
-#   ./run_exp_solve_jair.sh solve <domain> <seed> <algo> <shard> [loss]
+#   ./run_exp_solve_jair.sh solve <domain> <seed> <algo> <shard> [variant]
+#
+# A training variant is <loss>[_e<epochs>], loss mse (the recipe of the submitted
+# version) or nll, default mse with $EPOCHS epochs.
 #   ./run_exp_solve_jair.sh jobs-solve                     # one line per (domain, seed, algo, shard)
 #   ./run_exp_solve_jair.sh merge                          # merge the shards of solve.py
 #
@@ -47,10 +50,10 @@ config() {
     esac
 }
 
-# model name for a seed and a loss (mse is the recipe of the submitted version)
+# model name for a seed and a training variant
 model_name() {
-    local seed=$1 loss=${2:-mse}
-    if [ "$loss" = mse ]; then echo "seed_${seed}"; else echo "seed_${seed}_${loss}"; fi
+    local seed=$1 variant=${2:-mse}
+    if [ "$variant" = mse ]; then echo "seed_${seed}"; else echo "seed_${seed}_${variant}"; fi
 }
 
 data() {
@@ -65,10 +68,12 @@ data() {
 }
 
 train() {
-    local domain=$1 seed=$2 loss=${3:-mse}
+    local domain=$1 seed=$2 variant=${3:-mse}
+    local loss=${variant%%_e*} epochs=$EPOCHS
+    if [[ "$variant" == *_e* ]]; then epochs=${variant##*_e}; fi
     config "$domain"
     local train_file=$DSL/train_${DSL}_seed_${seed}.pickle
-    local model; model=$(model_name "$seed" "$loss")
+    local model; model=$(model_name "$seed" "$variant")
     local model_file=$DSL/$model.pt
     mkdir -p "$DSL/logs"
     if [ ! -s "$train_file" ]; then
@@ -78,24 +83,25 @@ train() {
     fi
     if [ ! -s "$model_file" ]; then
         $PYTHON examples/pbe/model_trainer.py --dsl "$DSL" --dataset "$train_file" --seed "$seed" \
-            -o "$model_file.tmp" $MODEL_FLAGS -e "$EPOCHS" --loss "$loss" > "$DSL/logs/train_${model}.log" 2>&1
+            -o "$model_file.tmp" $MODEL_FLAGS -e "$epochs" --loss "$loss" > "$DSL/logs/train_${model}.log" 2>&1
         mv "$model_file.tmp" "$model_file"
     fi
     if [ ! -s "$DSL/audit_${model}.csv" ]; then
-        $PYTHON examples/pbe/model_audit.py --dsl "$DSL" --dataset "$TEST_FILE" --model "$model_file" \
+        # inference on the CPU: cuDNN fails on the long sequences of the test tasks
+        CUDA_VISIBLE_DEVICES="" $PYTHON examples/pbe/model_audit.py --dsl "$DSL" --dataset "$TEST_FILE" --model "$model_file" \
             --support "$train_file" $MODEL_FLAGS -o "$DSL/audit_${model}.csv" > "$DSL/logs/audit_${model}.log" 2>&1
     fi
     if [ ! -s "$DSL/pcfgs_${TEST_NAME}_${model}.pickle" ]; then
-        $PYTHON examples/pbe/model_prediction.py --dsl "$DSL" --dataset "$TEST_FILE" --model "$model_file" \
+        CUDA_VISIBLE_DEVICES="" $PYTHON examples/pbe/model_prediction.py --dsl "$DSL" --dataset "$TEST_FILE" --model "$model_file" \
             --support "$train_file" $MODEL_FLAGS > "$DSL/logs/predict_${model}.log" 2>&1
     fi
 }
 
 solve() {
-    local domain=$1 seed=$2 algo=$3 shard=$4 loss=${5:-mse}
+    local domain=$1 seed=$2 algo=$3 shard=$4 variant=${5:-mse}
     config "$domain"
     local train_file=$DSL/train_${DSL}_seed_${seed}.pickle
-    local model; model=$(model_name "$seed" "$loss")
+    local model; model=$(model_name "$seed" "$variant")
     local out=$DSL/results
     local done_file="$out/shards/.done_${model}_${algo}_${shard}of${SHARDS}"
     if [ -e "$done_file" ]; then return 0; fi

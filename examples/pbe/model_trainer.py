@@ -245,8 +245,6 @@ def do_batch(iter_number: int) -> None:
         with chrono.clock("train.do_batch.loss.backprop"):
             loss.backward()
             optim.step()
-            # Should be called on val_loss but we don't have one here
-            scheduler.step(loss.item())
     # Logging
     writer.add_scalar("train/loss", loss.item(), iter_number)
     writer.add_scalar("train/lr", optim.param_groups[0]["lr"], iter_number)
@@ -286,6 +284,10 @@ def train() -> None:
     j = 0
     for ep in tqdm.trange(epochs, desc="epochs"):
         j = do_epoch(j)
+        # Stepped once per epoch on the mean training loss (we have no validation set).
+        # Stepping it on every batch loss, with the default patience of 10, made the
+        # learning rate collapse to 1e-8 within the first epoch.
+        scheduler.step(float(np.mean(losses)))
         print(
             f"epoch {ep}: mean loss {np.mean(losses):.4f} (last 20 batches: {np.mean(losses[-20:]):.4f}), lr {optim.param_groups[0]['lr']:.2e}",
             flush=True,
