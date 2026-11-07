@@ -2,6 +2,8 @@ import os
 import sys
 import multiprocessing
 import resource
+import threading
+import time
 from typing import Any, Callable, Iterable, List, Optional, Set, Tuple, Union
 import csv
 
@@ -131,6 +133,18 @@ parser.add_argument(
     help="solve each task in a child process and record its peak resident memory",
 )
 parser.add_argument(
+    "--max-memory",
+    type=float,
+    default=-1,
+    help="with --memory, stop a task when the resident memory of its process exceeds this value in GB; it is a failure (default: -1, no limit)",
+)
+parser.add_argument(
+    "--shard",
+    type=str,
+    default=None,
+    help="I/N: solve only the tasks of index I modulo N (0 <= I < N); the output goes to <output>/shards/ (merge with merge_solve_shards.py)",
+)
+parser.add_argument(
     "--filter",
     nargs="*",
     type=str,
@@ -152,6 +166,12 @@ support: Optional[str] = (
 pruning: List[str] = parameters.pruning or []
 filter_files: List[str] = parameters.filter or []
 measure_memory: bool = parameters.memory
+max_memory_kb: float = parameters.max_memory * 1024**2
+shard: Optional[Tuple[int, int]] = None
+if parameters.shard is not None:
+    shard_index, shard_count = (int(x) for x in parameters.shard.split("/"))
+    assert 0 <= shard_index < shard_count, "--shard I/N needs 0 <= I < N"
+    shard = (shard_index, shard_count)
 
 if not os.path.exists(dataset_file) or not os.path.isfile(dataset_file):
     print("Dataset must be a valid dataset file!", file=sys.stderr)
@@ -280,8 +300,39 @@ def __max_rss_kb__() -> int:
     return rss // 1024 if sys.platform == "darwin" else rss
 
 
+MEMORY_LIMIT_EXIT_CODE = 77
+
+
+def __current_rss_kb__() -> int:
+    try:
+        with open("/proc/self/statm") as fd:
+            return int(fd.read().split()[1]) * (os.sysconf("SC_PAGE_SIZE") // 1024)
+    except OSError:
+        return __max_rss_kb__()
+
+
+def __memory_watchdog__(connection: Any, baseline: int) -> None:
+    while True:
+        rss = __current_rss_kb__()
+        if rss > max_memory_kb:
+            connection.send(
+                (
+                    (False, None, [], f"memory limit ({parameters.max_memory} GB)"),
+                    __max_rss_kb__(),
+                    baseline,
+                )
+            )
+            connection.close()
+            os._exit(MEMORY_LIMIT_EXIT_CODE)
+        time.sleep(0.2)
+
+
 def __child_solve__(connection: Any, *args: Any) -> None:
     baseline = __max_rss_kb__()
+    if max_memory_kb > 0:
+        threading.Thread(
+            target=__memory_watchdog__, args=(connection, baseline), daemon=True
+        ).start()
     try:
         task_solved, solution, stats = solve_task(*args)
         result = (task_solved, str(solution) if solution else None, stats, "")
@@ -320,6 +371,7 @@ def solve_in_child_process(
             stats_name,
         ),
     )
+    started = time.perf_counter()
     process.start()
     child_connection.close()
     try:
@@ -335,10 +387,17 @@ def solve_in_child_process(
             None,
         )
     process.join()
+    if process.exitcode == MEMORY_LIMIT_EXIT_CODE and not error:
+        error = f"memory limit ({parameters.max_memory} GB)"
     if process.exitcode != 0 and not error:
         error = f"killed (exit code {process.exitcode})"
     if not stats:
-        stats = [None for _ in stats_name]
+        # the child was stopped: the plots need a time and a number of programs
+        elapsed = time.perf_counter() - started
+        stats = [
+            elapsed if name == "time" else 0 if name == "programs" else None
+            for name in stats_name
+        ]
     return task_solved, solution, stats, [peak, baseline, error]
 
 
@@ -364,6 +423,9 @@ def enumerative_search(
         for t in dataset.tasks
         if supported_type_requests is None or t.type_request in supported_type_requests
     ]
+    if shard is not None:
+        tasks = tasks[shard[0] :: shard[1]]
+        pcfgs = pcfgs[shard[0] :: shard[1]]
     stats_name = solver.available_stats()
     memory_columns = (
         ["peak_memory_kb", "baseline_memory_kb", "memory_error"]
@@ -442,6 +504,13 @@ if __name__ == "__main__":
         output_folder,
         f"{dataset_name}_{search_algo}_{model_name}_{solver.full_name()}{pruning_suffix}.csv",
     )
+    if shard is not None:
+        os.makedirs(os.path.join(output_folder, "shards"), exist_ok=True)
+        file = os.path.join(
+            output_folder,
+            "shards",
+            os.path.basename(file)[: -len(".csv")] + f".{shard[0]}of{shard[1]}.csv",
+        )
     trace = []
     if os.path.exists(file):
         with open(file, "r") as fd:

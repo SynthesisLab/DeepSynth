@@ -152,7 +152,7 @@ class Variable(Program):
         return True
 
     def clone(self) -> "Program":
-        return Variable(self.variable)
+        return Variable(self.variable, self.type)
 
     def __add_used_variables__(self, vars: Set[int]) -> None:
         vars.add(self.variable)

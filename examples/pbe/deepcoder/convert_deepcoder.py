@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Any, Callable, Dict, Tuple, List as TList
 
 import tqdm
@@ -32,14 +33,16 @@ def __convert__(load: Callable[[], Dataset[PBE]], name: str) -> None:
 
 
 def convert_deepcoder(
-    file: str = "deepcoder_dataset/T=3_train.json",
+    files: TList[str] = ["deepcoder_dataset/T=3_train.json"],
     output_file: str = "deepcoder.pickle",
 ) -> None:
     def load() -> Dataset[PBE]:
         tasks: TList[Task[PBE]] = []
-        with open(file, "r") as fd:
-            raw_tasks: TList[Dict[str, Any]] = json.load(fd)
-            for raw_task in tqdm.tqdm(raw_tasks, desc="converting"):
+        for file in files:
+            with open(file, "r") as fd:
+                raw_tasks: TList[Dict[str, Any]] = json.load(fd)
+            before = len(tasks)
+            for raw_task in tqdm.tqdm(raw_tasks, desc=f"converting {file}"):
                 name: str = raw_task["program"]
                 raw_examples: TList[Dict[str, Any]] = raw_task["examples"]
                 inputs = [raw_example["inputs"] for raw_example in raw_examples]
@@ -54,9 +57,15 @@ def convert_deepcoder(
                 if len(examples) < len(inputs):
                     continue
                 tasks.append(
-                    Task[PBE](type_request, PBE(examples), prog, {"name": name})
+                    Task[PBE](
+                        type_request,
+                        PBE(examples),
+                        prog,
+                        {"name": name, "source": os.path.basename(file)},
+                    )
                 )
-        return Dataset(tasks, metadata={"dataset": "deepcoder", "source:": file})
+            print(f"{file}: {len(tasks) - before} tasks")
+        return Dataset(tasks, metadata={"dataset": "deepcoder", "source:": files})
 
     __convert__(load, output_file)
 
@@ -103,9 +112,9 @@ if __name__ == "__main__":
 
     argument_parser.add_argument(
         type=str,
-        dest="file",
-        action="store",
-        help="Source JSON deepcoder file to be converted",
+        dest="files",
+        nargs="+",
+        help="Source JSON deepcoder files to be converted (merged into one dataset)",
     )
     argument_parser.add_argument(
         "-o",
@@ -116,4 +125,4 @@ if __name__ == "__main__":
         help=f"Output dataset file in ProgSynth format (default: '{argument_default_values['output']}')",
     )
     parsed_parameters = argument_parser.parse_args()
-    convert_deepcoder(parsed_parameters.file, parsed_parameters.output)
+    convert_deepcoder(parsed_parameters.files, parsed_parameters.output)

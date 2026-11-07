@@ -93,6 +93,12 @@ g.add_argument(
     help="weight decay (default: 1e-4)",
 )
 g.add_argument("-s", "--seed", type=int, default=0, help="seed (default: 0)")
+g.add_argument(
+    "--loss",
+    choices=["mse", "nll"],
+    default="mse",
+    help="mse: squared error between the log-probabilities and log(1e-5 + indicator of the rules used); nll: negative log-likelihood of the solution, normalised by its size (default: mse)",
+)
 
 parameters = parser.parse_args()
 dsl_name: str = parameters.dsl
@@ -107,6 +113,7 @@ cpu_only: bool = parameters.cpu
 no_clean: bool = parameters.no_clean
 no_shuffle: bool = parameters.no_shuffle
 no_stats: bool = parameters.no_stats
+loss_name: str = parameters.loss
 constrained: bool = parameters.constrained
 max_depth: int = parameters.max_depth
 ngram: int = parameters.ngram
@@ -188,6 +195,7 @@ print_model_summary(predictor)
 optim = torch.optim.AdamW(predictor.parameters(), lr, weight_decay=weight_decay)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, "min")
 dataset_index = 0
+losses: List[float] = []
 
 
 @chrono.clock(prefix="train.do_batch")
@@ -220,9 +228,20 @@ def do_batch(iter_number: int) -> None:
     with chrono.clock("train.do_batch.loss"):
         optim.zero_grad()
         with chrono.clock("train.do_batch.loss.compute"):
-            loss = predictor.bigram_layer.loss_mse(
-                batch_programs, batch_tr, batch_outputs
-            )
+            if loss_name == "mse":
+                loss = predictor.bigram_layer.loss_mse(
+                    batch_programs, batch_tr, batch_outputs
+                )
+            else:
+                loss = predictor.bigram_layer.loss_negative_log_prob(
+                    batch_programs,
+                    [
+                        predictor.bigram_layer.tensor2log_prob_grammar(
+                            batch_outputs[i].clone(), tr
+                        )
+                        for i, tr in enumerate(batch_tr)
+                    ],
+                )
         with chrono.clock("train.do_batch.loss.backprop"):
             loss.backward()
             optim.step()
@@ -230,6 +249,8 @@ def do_batch(iter_number: int) -> None:
             scheduler.step(loss.item())
     # Logging
     writer.add_scalar("train/loss", loss.item(), iter_number)
+    writer.add_scalar("train/lr", optim.param_groups[0]["lr"], iter_number)
+    losses.append(loss.item())
     if not no_stats:
         with chrono.clock("train.do_batch.stats"):
             with torch.no_grad():
@@ -265,6 +286,11 @@ def train() -> None:
     j = 0
     for ep in tqdm.trange(epochs, desc="epochs"):
         j = do_epoch(j)
+        print(
+            f"epoch {ep}: mean loss {np.mean(losses):.4f} (last 20 batches: {np.mean(losses[-20:]):.4f}), lr {optim.param_groups[0]['lr']:.2e}",
+            flush=True,
+        )
+        losses.clear()
         torch.save(predictor.state_dict(), f"{output_file}_epoch{ep}.tmp")
 
 
