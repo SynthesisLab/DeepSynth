@@ -69,7 +69,10 @@ merge() {
             set -- $pattern
             if [ ! -e "$1" ]; then continue; fi
             head -n 1 "$1" > "$out"
-            for f in "$@"; do tail -n +2 "$f" >> "$out"; done
+            # rows sorted by algorithm, seed and size, as the plots expect
+            # (columns: search,non_terminals,derivation_rules,time,programs,queue,bank,seed)
+            for f in "$@"; do tail -n +2 "$f"; done \
+                | sort -t, -k1,1 -k8,8n -k2,2n -k3,3n -k5,5n >> "$out"
             echo "$out: $(($(wc -l < "$out") - 1)) rows"
         done
     done
