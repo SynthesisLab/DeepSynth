@@ -14,7 +14,7 @@ dependencies = [
     "tensorboard>=0",
     "cython>=0.29",
     "numpy>=1.22",
-    "vose",
+    "timeout-decorator>=0.5",
     "colorama>=0.4.4",
     "tqdm>=4.63.0",
     "matplotlib>=3.5.1",
@@ -32,7 +32,6 @@ dev = [
 ]
 
 [tool.uv.sources]
-vose = { git = "https://github.com/Theomat/vose.git" }
 grape = { git = "https://github.com/SynthesisLab/grape.git" }
 
 [build-system]

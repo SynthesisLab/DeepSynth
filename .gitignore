@@ -34,3 +34,6 @@ docs/build
 
 # Parsing Sygus files
 examples/sygus/parsing/**/*.py
+# JAIR rerun
+enumeration_jair/
+data_raw/

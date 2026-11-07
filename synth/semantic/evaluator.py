@@ -50,8 +50,14 @@ class DSLEvaluator(Evaluator):
                 self.compress(p, allow_constants=allow_constants)
                 for p in program.arguments
             ]
-            if len(program.type.returns().arguments()) == 0 and all(
-                not a.uses_variables() for a in args
+            # Constants without a value are assigned later (per task): such a
+            # subprogram cannot be evaluated yet.
+            if (
+                len(program.type.returns().arguments()) == 0
+                and all(not a.uses_variables() for a in args)
+                and all(
+                    c is None or c.has_value() for a in args for c in a.constants()
+                )
             ):
                 before = self.use_cache
                 self.use_cache = False

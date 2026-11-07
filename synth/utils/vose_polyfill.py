@@ -3,67 +3,52 @@ import numpy as np
 
 
 class PythonSampler:
+    """
+    Alias method (Vose) for sampling from a discrete distribution.
+
+    The compiled `vose.Sampler` (github.com/Theomat/vose, 0.0.4) is not used:
+    its fair die overflows a 32-bit product for n >= 3 and only returns 0 or 1.
+    """
+
     def __init__(self, weights: np.ndarray, seed: Optional[int] = None) -> None:
         self.rng = np.random.default_rng(seed or 1)
+        weights = np.asarray(weights, dtype=float)
         n = len(weights)
+        assert n > 0, "cannot sample from an empty distribution"
+        total = np.sum(weights)
+        assert total > 0, "weights must have a positive sum"
+        # Scale so that the average is 1.
+        scaled = weights * n / total
         alias = np.zeros(n, dtype=int)
         proba = np.zeros(n, dtype=float)
-        # Compute the average probability and cache it for later use.
-        avg = 1.0 / n
-        # Create two stacks to act as worklists as we populate the tables.
-        small = []
-        large = []
-        # Populate the stacks with the input probabilities.
-        for i in range(n):
-            # If the probability is below the average probability, then we add it to the small
-            # list; otherwise we add it to the large list.
-            if weights[i] >= avg:
-                large.append(i)
-            else:
-                small.append(i)
-        # As a note: in the mathematical specification of the algorithm, we will always exhaust the
-        # small list before the big list. However, due to floating point inaccuracies, this is not
-        # necessarily true. Consequently, this inner loop (which tries to pair small and large
-        # elements) will have to check that both lists aren't empty.
-        while len(small) > 0 and len(large) > 0:
-            # Get the index of the small and the large probabilities.
-            less = small.pop(0)
-            more = large.pop(0)
-            # These probabilities have not yet been scaled up to be such that 1 / n is given weight
-            # 1.0. We do this here instead.
-            proba[less] = weights[less] * n
+        small = [i for i in range(n) if scaled[i] < 1.0]
+        large = [i for i in range(n) if scaled[i] >= 1.0]
+        while small and large:
+            less = small.pop()
+            more = large.pop()
+            proba[less] = scaled[less]
             alias[less] = more
-            # Decrease the probability of the larger one by the appropriate amount.
-            weights[more] = weights[more] + weights[less] - avg
-            # If the new probability is less than the average, add it into the small list;
-            # otherwise add it to the large list.
-            if weights[more] >= avg:
-                large.append(more)
-            else:
+            # The column of `less` is filled with `more`.
+            scaled[more] = scaled[more] + scaled[less] - 1.0
+            if scaled[more] < 1.0:
                 small.append(more)
-        # At this point, everything is in one list, which means that the remaining probabilities
-        # should all be 1 / n.  Based on this, set them appropriately. Due to numerical issues, we
-        # can't be sure which stack will hold the entries, so we empty both.
-        while len(small) > 0:
-            less = small.pop(0)
-            proba[less] = 1.0
-        while len(large) > 0:
-            more = large.pop(0)
-            proba[more] = 1.0
+            else:
+                large.append(more)
+        # Due to floating point inaccuracies, either list may hold the last
+        # columns: they are full.
+        for i in small + large:
+            proba[i] = 1.0
+            alias[i] = i
         self.n = n
         self.alias = alias
         self.proba = proba
 
     def sample_1(self) -> int:
-        # Generate a fair die roll to determine which column to inspect.
-        col = int(self.rng.uniform(0, self.n))
-        # Generate a biased coin toss to determine which option to pick.
-        heads = self.rng.uniform() < 0.5
-
-        # Based on the outcome, return either the column or its alias.
-        if heads:
+        # Fair die to choose the column, then biased coin within the column.
+        col = int(self.rng.integers(0, self.n))
+        if self.rng.random() < self.proba[col]:
             return col
-        return self.alias[col]  # type: ignore
+        return int(self.alias[col])
 
     def sample(
         self, k: int = 1, values: Optional[np.ndarray] = None
@@ -86,9 +71,4 @@ class PythonSampler:
             return np.asarray([values[self.sample_1()] for _ in range(k)])
 
 
-try:
-    import vose
-
-    Sampler = vose.Sampler
-except ImportError:
-    Sampler = PythonSampler
+Sampler = PythonSampler

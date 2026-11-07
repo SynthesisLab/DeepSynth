@@ -1,5 +1,7 @@
 from typing import Callable, Iterable, List, Optional, Tuple, Union
 import csv
+import resource
+import sys
 import time
 import argparse
 
@@ -29,6 +31,7 @@ SEARCH_ALGOS = {
     "cd4": lambda x: cd(x, k=4),
     "cd16": lambda x: cd(x, k=16),
     "cd64": lambda x: cd(x, k=64),
+    "cd_search": lambda x: cd(x, k=20),
 }
 
 parser = argparse.ArgumentParser(
@@ -61,6 +64,26 @@ parser.add_argument(
 parser.add_argument(
     "-s", "--seed", type=int, default=-1, help="seed (default: -1, uniform)"
 )
+parser.add_argument(
+    "--algos",
+    nargs="+",
+    choices=list(SEARCH_ALGOS.keys()),
+    default=None,
+    help="enumeration algorithms to run (default: all)",
+)
+parser.add_argument(
+    "--sizes",
+    nargs="+",
+    type=int,
+    default=None,
+    help="sizes of the grammars (default: 4, 6, 8, 10, 12, 22, ... up to max_non_terminals)",
+)
+parser.add_argument(
+    "--max-memory",
+    type=float,
+    default=-1,
+    help="stop an enumeration when the peak memory of the process exceeds this value in GB (default: -1, no limit)",
+)
 
 
 parameters = parser.parse_args()
@@ -70,12 +93,36 @@ timeout: int = parameters.timeout
 seed: int = parameters.seed
 scaling: str = parameters.scaling
 max_non_terminals: int = parameters.max_non_terminals
+max_memory: float = parameters.max_memory
+if parameters.algos is not None:
+    SEARCH_ALGOS = {name: SEARCH_ALGOS[name] for name in parameters.algos}
 file_name = output_file[: -len(".csv")] if output_file.endswith(".csv") else output_file
 
 
 # ================================
 # Load constants specific to dataset
 # ================================
+
+
+def peak_memory_gb() -> float:
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # kilobytes on Linux, bytes on macOS
+    if sys.platform == "darwin":
+        return peak / 1024**3
+    return peak / 1024**2
+
+
+def memory_exceeded(name: str, n: int) -> bool:
+    if max_memory <= 0:
+        return False
+    peak = peak_memory_gb()
+    if peak > max_memory:
+        print(
+            f"[max-memory] {name}: stopped after {n} programs, peak memory {peak:.2f} GB > {max_memory} GB",
+            file=sys.stderr,
+        )
+        return True
+    return False
 
 
 def save(trace: Iterable, name: str) -> None:
@@ -125,7 +172,7 @@ def summary_enumerative_search(
                 if used_time >= timeout * 1e9:
                     break
                 pbar.update(datum_each)
-                if n >= programs:
+                if n >= programs or memory_exceeded(name, n):
                     break
                 rem_time = timeout - used_time / 1e9
                 get_next = timeout_decorator.timeout(
@@ -194,7 +241,7 @@ def enumerative_search(
                 if used_time >= timeout * 1e9:
                     break
                 pbar.update(datum_each)
-                if n >= programs:
+                if n >= programs or memory_exceeded(name, n):
                     break
                 detailed.append(
                     (
@@ -332,6 +379,8 @@ if __name__ == "__main__":
         else:
             last += 10
         non_terminals_values.append(last)
+    if parameters.sizes is not None:
+        non_terminals_values = parameters.sizes
     first = True
     for non_terminals in non_terminals_values:
         cfg = gene[scaling](non_terminals)

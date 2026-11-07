@@ -143,7 +143,10 @@ def reproduce_dataset(
         produces the lexicon
     """
 
-    max_depth = -1
+    # The depth of sampled programs is given by default_max_depth (--max-depth),
+    # not by the depth of the known solutions: one deep solution would make
+    # every sampled program deep.
+    max_depth = default_max_depth
     allowed_types: TList[Type] = []
     types_probs_list: TList[float] = []
 
@@ -167,8 +170,6 @@ def reproduce_dataset(
 
     # Capture all information in one dataset pass
     for task in dataset:
-        if task.solution:
-            max_depth = max(max_depth, task.solution.depth())
         # Type distribution
         if task.type_request not in allowed_types:
             allowed_types.append(task.type_request)
@@ -201,8 +202,6 @@ def reproduce_dataset(
     )
     no_samples_gen = __multi_discrete_to_gen__(no_samples, seed=seed)
 
-    if max_depth == -1:
-        max_depth = default_max_depth
     pgrammars: Set[Union[ProbUGrammar, ProbDetGrammar]] = set()
     pgrammars = {
         ProbDetGrammar.uniform(

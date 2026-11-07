@@ -340,4 +340,4 @@ with chrono.clock("dataset.save") as c:
 # Generate the CFG dictionnary
 all_type_requests = gen_dataset.type_requests()
 print(f"{len(all_type_requests)} type requests supported.")
-print(f"Lexicon: [{min(lexicon)};{max(lexicon)}]")
+print(f"Lexicon: {len(lexicon)} elements")
