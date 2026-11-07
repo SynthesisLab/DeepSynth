@@ -89,8 +89,10 @@ cfgs = [
     )
     for tr in supported
 ]
+device = "cuda" if not parameters.cpu and torch.cuda.is_available() else "cpu"
 predictor = instantiate_predictor(parameters, cfgs, lexicon)
-predictor.load_state_dict(torch.load(parameters.model, map_location="cpu"))
+predictor.load_state_dict(torch.load(parameters.model, map_location=device))
+predictor = predictor.to(device)
 predictor.eval()
 layer = predictor.bigram_layer
 uniform = {cfg.type_request: ProbDetGrammar.uniform(cfg) for cfg in cfgs}

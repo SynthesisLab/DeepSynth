@@ -190,7 +190,7 @@ print(f"{len(all_type_requests)} type requests supported.")
 print(f"Lexicon: [{min(lexicon)};{max(lexicon)}]")
 
 
-predictor = instantiate_predictor(parameters, cfgs, lexicon)
+predictor = instantiate_predictor(parameters, cfgs, lexicon).to(device)
 print_model_summary(predictor)
 optim = torch.optim.AdamW(predictor.parameters(), lr, weight_decay=weight_decay)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, "min")
