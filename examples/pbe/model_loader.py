@@ -28,6 +28,7 @@ class MyPredictor(nn.Module):
         encoding_dimension: int,
         device: str,
         lexicon,
+        io_padding: bool = True,
     ) -> None:
         super().__init__()
         layer = UGrammarPredictorLayer if constrained else DetGrammarPredictorLayer
@@ -42,7 +43,7 @@ class MyPredictor(nn.Module):
             abstraction,
             variable_probability,
         )
-        encoder = IOEncoder(encoding_dimension, lexicon)
+        encoder = IOEncoder(encoding_dimension, lexicon, padding=io_padding)
         self.packer = Task2Tensor(
             encoder, nn.Embedding(len(encoder.lexicon), size), size, device=device
         )
@@ -79,6 +80,7 @@ def instantiate_predictor(
         encoding_dimension,
         device,
         lexicon,
+        io_padding=not parameters.no_io_padding,
     ).to(device)
 
 
@@ -104,6 +106,12 @@ def add_model_choice_arg(parser: ArgumentParser) -> None:
         type=int,
         default=512,
         help="hidden layer size (default: 512)",
+    )
+    gg.add_argument(
+        "--no-io-padding",
+        action="store_true",
+        default=False,
+        help="do not pad the encoding of each example to the encoding dimension",
     )
     gg.add_argument(
         "--cpu",

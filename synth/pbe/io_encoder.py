@@ -10,9 +10,20 @@ from synth.task import Task
 
 class IOEncoder(SpecificationEncoder[PBE, Tensor]):
     def __init__(
-        self, output_dimension: int, lexicon: List[Any], undefined: bool = True
+        self,
+        output_dimension: int,
+        lexicon: List[Any],
+        undefined: bool = True,
+        padding: bool = True,
     ) -> None:
+        """
+        padding: pad the encoding of each example to output_dimension (with the ENDING symbol).
+        Without padding, the encodings of the examples have different lengths and are
+        concatenated as they are: a recurrent network then reads each example once,
+        instead of reading up to output_dimension symbols per example.
+        """
         self.output_dimension = output_dimension
+        self.padding = padding
 
         self.special_symbols = [
             "PADDING",  # padding symbol that can be used later
@@ -67,13 +78,20 @@ class IOEncoder(SpecificationEncoder[PBE, Tensor]):
             assert False, "IOEncoder: IO too large: {} > {} for {}".format(
                 size, self.output_dimension, IO
             )
-        else:
+        elif self.padding:
             for _ in range(self.output_dimension - size):
                 e.append(self.ending_index)
         res = torch.LongTensor(e).to(device)
         return res
 
     def encode(self, task: Task[PBE], device: Optional[str] = None) -> Tensor:
+        if not self.padding:
+            return torch.cat(
+                [
+                    self.encode_IO((ex.inputs, ex.output), device)
+                    for ex in task.specification.examples
+                ]
+            )
         return torch.stack(
             [
                 self.encode_IO((ex.inputs, ex.output), device)
