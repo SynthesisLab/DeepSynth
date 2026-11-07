@@ -105,9 +105,16 @@ solve() {
     local out=$DSL/results
     local done_file="$out/shards/.done_${model}_${algo}_${shard}of${SHARDS}"
     if [ -e "$done_file" ]; then return 0; fi
+    local pcfg_file=$DSL/pcfgs_${TEST_NAME}_${model}.pickle
+    # wait up to $PCFG_WAIT seconds for the PCFGs (when the training runs in another job)
+    local waited=0
+    while [ ! -s "$pcfg_file" ]; do
+        if [ "$waited" -ge "${PCFG_WAIT:-0}" ]; then echo "missing $pcfg_file" >&2; return 1; fi
+        sleep 60; waited=$((waited + 60))
+    done
     mkdir -p "$out/shards" "$DSL/logs/solve"
     $PYTHON examples/pbe/solve.py --dsl "$DSL" --dataset "$TEST_FILE" -o "$out" --support "$train_file" \
-        --pcfg "$DSL/pcfgs_${TEST_NAME}_${model}.pickle" --solver "$SOLVER" --search "$algo" \
+        --pcfg "$pcfg_file" --solver "$SOLVER" --search "$algo" \
         -t "$TIMEOUT" --pruning obs-eq --memory --max-memory "$MEMORY" --shard "$shard/$SHARDS" \
         > "$DSL/logs/solve/${model}_${algo}_${shard}of${SHARDS}.log" 2>&1
     touch "$done_file"
