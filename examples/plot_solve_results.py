@@ -17,7 +17,12 @@ from plot_helper import (
 )
 
 
-rename = {"cd_search": "eco_search", "beap_search": "eco_search_w/o_buckets"}
+rename = {
+    "cd_search": "eco_search",
+    "beap_search": "eco_search_w/o_buckets",
+    "cd_search_eager": "eco_search_with_eager_expansion",
+    "bee_search_buckets": "bee_search_with_buckets",
+}
 
 
 def load_data(
