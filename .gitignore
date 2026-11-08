@@ -37,3 +37,4 @@ examples/sygus/parsing/**/*.py
 # JAIR rerun
 enumeration_jair/
 data_raw/
+!jair_results/**/*.csv
