@@ -38,3 +38,4 @@ examples/sygus/parsing/**/*.py
 enumeration_jair/
 data_raw/
 !jair_results/**/*.csv
+jair_rerun_report.md
